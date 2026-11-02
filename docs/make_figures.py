@@ -19,10 +19,22 @@ from deplayer.targets import TARGETS              # noqa: E402
 import matplotlib                                 # noqa: E402
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt                   # noqa: E402
+from matplotlib.ticker import FuncFormatter       # noqa: E402
 
 plt.rcParams.update({'font.family': 'Times New Roman', 'font.size': 12, 'axes.linewidth': 0.8,
                      'savefig.dpi': 200, 'savefig.bbox': 'tight'})
 FONT = 'Times New Roman,'   # кома: інакше Pango сприймає «Roman» як стиль
+
+
+def num(v, fmt='%g'):
+    """Число за ДСТУ: десяткова кома й справжній мінус."""
+    return (fmt % v).replace('.', ',').replace('-', '−')
+
+
+def comma_axes(*axes):
+    for ax in axes:
+        for a in (ax.xaxis, ax.yaxis):
+            a.set_major_formatter(FuncFormatter(lambda v, _: num(round(v, 6))))
 
 
 def dot(name, src):
@@ -137,7 +149,7 @@ def diagram_format():
 digraph F {
   rankdir=TB; nodesep=0.2; ranksep=0.35;
   node [shape=record, fontname="%s", fontsize=11];
-  elf [label="{ELF для ARM|{заголовок ELF\n52 Б|заголовки\nпрограми|сегмент 1:\nплеєр, 0x00000000\n~5,8 КБ|сегмент 2:\nтрек, 0x00200000|заголовки\nрозділів}}"];
+  elf [label="{ELF для ARM|{заголовок ELF\n52 Б|заголовки\nпрограми|сегмент 1:\nпрогравач, 0x00000000\n~5,8 КБ|сегмент 2:\nтрек, 0x00200000|заголовки\nрозділів}}"];
   hdr [label="{Заголовок треку «DE1A», 64 Б|{magic|версія\nкодек|частота|канали\nвідліків у блоці|блоків\nбайтів у блоці|відліків|зміщення\nрозмір даних|контрольна\nсума|прапорці\n(HEX)|затримка\nчерги|вікно шкали\nmax_lag}}"];
   blk [label="{Блок IMA ADPCM, 1032 Б (стерео)|{стан L: 4 Б\n(pred, index)|стан R: 4 Б|L: 1024 напівбайти\n512 Б|R: 1024 напівбайти\n512 Б}}"];
   elf -> hdr [label="початок сегмента 2", fontname="%s", fontsize=10, arrowsize=0.6];
@@ -194,7 +206,8 @@ def plot_meter(pcm, rate):
     a2.set_yticks(range(0, 11, 2))
     a2.set_ylabel('Світлодіодів')
     a2.set_xlabel('t, с')
-    a2.legend(loc='lower right', frameon=False, fontsize=10)
+    a2.legend(loc='lower center', frameon=False, fontsize=10, ncol=2)
+    comma_axes(a1, a2)
     fig.savefig(os.path.join(HERE, 'plot_meter.png'))
     plt.close(fig)
     hist = np.bincount(bar, minlength=11) / len(bar) * 100
@@ -221,11 +234,13 @@ def plot_adpcm(track):
         e = pcm.astype(np.float64) - dec.astype(np.float64)
         snr = 10 * np.log10(np.mean(pcm.astype(np.float64) ** 2) / np.mean(e ** 2))
         out[key] = snr
-        ax.set_title('%d Гц, SNR %.1f дБ' % (t.rate, snr), fontsize=12)
+        ax.set_title('%d Гц, SNR %s дБ' % (t.rate, num(snr, '%.1f')), fontsize=12)
         ax.set_ylabel('Амплітуда')
-        ax.legend(loc='upper right', frameon=False, fontsize=9, ncol=3)
+        comma_axes(ax)
     axes[-1].set_xlabel('t, мс (фрагмент із 60-ї секунди)')
-    fig.tight_layout()
+    h, lab = axes[0].get_legend_handles_labels()
+    fig.legend(h, lab, loc='upper center', ncol=3, frameon=False, fontsize=10)
+    fig.tight_layout(rect=(0, 0, 1, 0.94))
     fig.savefig(os.path.join(HERE, 'plot_adpcm.png'))
     plt.close(fig)
     print('рисунок plot_adpcm.png; SNR:', {k: round(v, 1) for k, v in out.items()})
@@ -264,6 +279,7 @@ def plot_clock():
     ax.set_ylabel('Позиція в треку, с')
     ax.set_ylim(bottom=0)
     ax.legend(loc='upper left', frameon=False, fontsize=10)
+    comma_axes(ax)
     fig.savefig(os.path.join(HERE, 'plot_clock.png'))
     plt.close(fig)
     err = np.array(C[400:]) - np.array(P[400:])
