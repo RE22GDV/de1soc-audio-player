@@ -1,0 +1,3 @@
+numpy>=1.24
+miniaudio>=1.59
+websocket-client>=1.6
