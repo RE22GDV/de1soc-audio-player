@@ -1,15 +1,16 @@
 # -*- coding: utf-8 -*-
 """Схеми й графіки для README та звіту (чорно-білі, Times New Roman).
 
-    python docs/make_figures.py трек.mp3
+    python docs/make_figures.py [трек.mp3]   (без треку — лише схеми)
 
-Потрібні Graphviz (dot) і matplotlib — лише для цих рисунків, не для застосунку.
+Потрібні Graphviz (dot), matplotlib і Pillow — лише для цих рисунків, не для застосунку.
 """
 import os
 import subprocess
 import sys
 
 import numpy as np
+from PIL import Image
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'app'))
@@ -40,121 +41,122 @@ def comma_axes(*axes):
 def dot(name, src):
     path = os.path.join(HERE, name + '.png')
     subprocess.run(['dot', '-Tpng', '-Gdpi=300', '-o', path], input=src.encode('utf-8'), check=True)
-    print('рисунок', path)
+    with Image.open(path) as im:
+        print('рисунок %s: %.1f x %.1f см без масштабування' % (
+            name, im.width / 300 * 2.54, im.height / 300 * 2.54))
 
 
 # --------------------------------------------------------------- схеми
 def diagram_system():
     dot('diagram_system', r'''
 digraph G {
-  rankdir=TB; nodesep=0.3; ranksep=0.45; newrank=true;
-  node [shape=box, fontname="%s", fontsize=12, style="rounded"];
-  edge [fontname="%s", fontsize=10, arrowsize=0.7];
-  subgraph cluster_pc { label="Комп'ютер: застосунок audio_player (Python)"; fontname="%s"; fontsize=12; style=dashed;
-    trk [label="Трек
-mp3 / wav / flac"];
-    dec [label="Розкодування
-(miniaudio)"];
-    rs  [label="Зміна частоти
-до 8 або 48 кГц (FFT)"];
-    enc [label="IMA ADPCM або PCM16
-блоками по 1024 відліки"];
-    blb [label="Трек «DE1A»: заголовок
-64 Б, контрольна сума"];
-    elf [label="ELF: player.elf +
-сегмент треку 0x00200000"];
-    ver [label="Перевірка: розпакування,
-SNR, контрольна сума"];
-    { rank=same; trk; dec; rs; enc; }
-    { rank=same; blb; elf; ver; }
-    trk -> dec -> rs -> enc;
-    enc -> blb; blb -> elf -> ver;
+  rankdir=TB; nodesep=0.22; ranksep=0.32; newrank=true;
+  node [shape=box, fontname="%s", fontsize=13, style="rounded", margin="0.07,0.04"];
+  edge [arrowsize=0.7];
+  subgraph cluster_pc { label="Комп'ютер: застосунок audio_player (Python)"; fontname="%s"; fontsize=13; style=dashed;
+    trk [label="Трек\nmp3, wav, flac, ogg"];
+    dec [label="Розкодування\n(miniaudio)"];
+    rs  [label="Зміна частоти до\n8 або 48 кГц (FFT)"];
+    { rank=same; trk; dec; rs; }
+    trk -> dec -> rs;
+    elf [label="ELF: player.elf + сегмент\nтреку 0x00200000"];
+    blb [label="Трек «DE1A»: заголовок\n64 Б, контрольна сума"];
+    enc [label="IMA ADPCM або PCM16\nблоками по 1024 відліки"];
+    { rank=same; elf; blb; enc; }
+    elf -> blb [dir=back]; blb -> enc [dir=back];
+    rs -> enc;
+    ver [label="Перевірка: заголовок, контрольна сума,\nрозпакування всіх блоків, SNR"];
+    elf -> ver;
   }
-  cpu [label="CPUlator, звук 8000 Гц:
-місцевий посередник —
-автозавантаження й пам'ять"];
-  mp  [label="Intel FPGA Monitor Program
-(JTAG, програма типу ELF)"];
+  cpu [label="CPUlator, звук 8 кГц: місцевий\nпосередник, автозавантаження"];
+  mp  [label="Intel FPGA Monitor Program\n(JTAG, програма типу ELF)"];
   { rank=same; cpu; mp; }
-  subgraph cluster_board { label="Плата DE1-SoC, система ЛР5 (8 або 48 кГц)"; labelloc=b; fontname="%s"; fontsize=12; style=dashed;
-    key [label="KEY0–KEY3
-0xFF200050"];
-    arm [label="ARM Cortex-A9: player.c
-DDR3: код + трек"];
-    aud [label="Audio core
-0xFF203040"];
-    cod [label="Кодек WM8731
-LINE OUT"];
-    led [label="LEDR9–LEDR0 0xFF200000
-шкала гучності"];
-    { rank=same; key; arm; aud; cod; }
-    key -> arm -> aud -> cod;
-    arm -> led;
+  ver -> cpu; ver -> mp;
+  subgraph cluster_board { label="Плата DE1-SoC, система ЛР5 (8 або 48 кГц)"; labelloc=b; fontname="%s"; fontsize=13; style=dashed;
+    key [label="KEY0–KEY3\n0xFF200050"];
+    arm [label="ARM Cortex-A9: player.c\nDDR3: програма й трек"];
+    aud [label="Звуковий порт\n0xFF203040"];
+    { rank=same; key; arm; aud; }
+    key -> arm -> aud;
+    led [label="LEDR9–LEDR0, 0xFF200000\nшкала гучності"];
+    cod [label="Кодек WM8731\nLINE OUT"];
+    { rank=same; led; cod; }
+    arm -> led; aud -> cod;
   }
-  ver -> cpu; ver -> mp; mp -> arm;
-}''' % ((FONT,) * 4))
+  mp -> arm;
+}''' % ((FONT,) * 3))
 
 
 def diagram_states():
     dot('diagram_states', r'''
 digraph S {
-  rankdir=LR; nodesep=0.6; ranksep=0.9;
-  node [shape=ellipse, fontname="%s", fontsize=12];
-  edge [fontname="%s", fontsize=10, arrowsize=0.7];
+  rankdir=TB; nodesep=0.45; ranksep=0.5; newrank=true;
+  node [shape=ellipse, fontname="%s", fontsize=13, margin="0.03,0.03"];
+  edge [fontname="%s", fontsize=12, arrowsize=0.7];
   start [shape=point, width=0.12];
-  chk [shape=diamond, label="контрольна\nсума збігається?", fontsize=11];
-  PLAY [label="ВІДТВОРЕННЯ\nчерга звуку доливається,\nшкала гучності"];
-  PAUSE [label="ПАУЗА\nчергу очищено,\nшкала блимає"];
-  END [label="КІНЕЦЬ\nсвітлодіоди згасли"];
+  chk [shape=diamond, label="заголовок і контрольна\nсума правильні?", margin="0,0"];
   BAD [label="ПОМИЛКА\nLEDR блимають\nчерез один", style=dashed];
+  { rank=same; chk; BAD; }
+  PLAY [label="ВІДТВОРЕННЯ\nчерга доливається,\nшкала гучності"];
+  PAUSE [label="ПАУЗА\nчергу очищено,\nшкала блимає"];
+  END [label="КІНЕЦЬ\nсвітлодіоди згасли,\nна HEX «En»"];
+  { rank=same; PAUSE; END; }
   start -> chk;
-  chk -> PLAY [label="так"];
-  chk -> BAD [label="ні"];
-  PLAY -> PAUSE [label="KEY0\n(запам'ятати позицію)"];
-  PAUSE -> PLAY [label="KEY0\n(з тієї ж позиції)"];
-  PLAY -> END [label="трек дограв"];
-  END -> PLAY [label="KEY0 або KEY1\n(з початку)"];
-  PLAY -> PLAY [label="KEY1 — з початку\nKEY2/KEY3 — ±10 с"];
-  PAUSE -> PLAY [label="KEY1"];
+  chk -> BAD [label="  ні  "];
+  chk -> PLAY [label=" так"];
+  PLAY -> PLAY [label="KEY1 — з початку\nKEY2, KEY3 — ±10 с"];
+  PLAY -> PAUSE [label="KEY0: позиція\nза годинником  "];
+  PAUSE -> PLAY [label="  KEY0 — далі\n  KEY1 — з початку"];
+  PAUSE -> PAUSE [label="KEY2, KEY3\n±10 с"];
+  PLAY -> END [label="  усе записано й\n  годинник дійшов\n  до кінця треку"];
+  END -> PLAY [label="  KEY0, KEY1 — з початку\n  KEY2 — на 10 с назад"];
 }''' % (FONT, FONT))
 
 
 def diagram_loop():
     dot('diagram_loop', r'''
 digraph L {
-  rankdir=TB; nodesep=0.3; ranksep=0.28;
-  node [shape=box, fontname="%s", fontsize=11];
-  edge [arrowsize=0.6, fontname="%s", fontsize=10];
-  s [shape=box, style=rounded, label="Старт: таймер, скидання\nрегістра захоплення KEY"];
-  c [shape=diamond, label="заголовок і\nконтрольна сума\nправильні?"];
-  e [label="ПОМИЛКА:\nблимання LEDR", style=dashed];
-  k [shape=diamond, label="у регістрі\nзахоплення є\nнатискання?"];
-  a [label="KEY0 пауза / продовження\nKEY1 з початку\nKEY2, KEY3 ±10 с\n(seek: очистити чергу)"];
-  p [shape=diamond, label="стан =\nВІДТВОРЕННЯ?"];
-  f [label="fill_fifo(): доки в черзі є місце —\nрозпакувати блок, записати L/R,\nпік модуля у вікні 20 мс"];
-  u [label="update_clock(): годинник за таймером,\nобмежений pos − затримка черги"];
-  m [label="meter_step(): рівень вікна → смуга,\nспад 1 світлодіод за 40 мс,\nутримання піку 0,6 с → LEDR"];
-  b [label="блимання шкали (пауза)\nабо LEDR = 0 (кінець)"];
+  rankdir=TB; nodesep=0.3; ranksep=0.24; newrank=true;
+  node [shape=box, fontname="%s", fontsize=12, margin="0.08,0.04"];
+  edge [arrowsize=0.65, fontname="%s", fontsize=12];
+  s [style=rounded, label="Старт: таймер, скидання\nрегістра захоплення KEY"];
+  c [shape=diamond, margin="0,0", label="заголовок і\nконтрольна сума\nправильні?"];
+  e [label="ПОМИЛКА:\nблимання LEDR\nчерез один", style=dashed];
+  { rank=same; c; e; }
+  k [shape=diamond, margin="0,0", label="у регістрі\nзахоплення є\nнатискання?"];
+  a [label="KEY0: пауза, продовження\nKEY1: з початку\nKEY2, KEY3: ±10 с\n(перехід очищає чергу)"];
+  a1 [shape=circle, label="А", margin=0, width=0.34, height=0.34];
+  a2 [shape=circle, label="А", margin=0, width=0.34, height=0.34];
+  { rank=same; a1; k; a; }
+  p [shape=diamond, margin="0,0", label="стан =\nВІДТВОРЕННЯ?"];
+  b [label="пауза: блимання шкали\nкінець: LEDR = 0"];
+  { rank=same; p; b; }
+  f [label="fill_fifo(): доки в черзі є місце, розпакувати\nблок, записати L і R, пік модуля у вікні 20 мс"];
+  u [label="update_clock(): годинник за таймером у межах\nпозиції запису мінус затримка черги. Коли все\nзаписано, верхня межа дорівнює кінцю треку"];
+  t [label="годинник дійшов до кінця треку: стан = КІНЕЦЬ"];
+  m [label="meter_step(): рівень вікна у смугу, спад\n1 світлодіод за 40 мс, утримання піку 0,6 с"];
   h [label="HEX: час мм.сс (лише CPUlator)"];
-  s -> c; c -> e [label="ні"]; c -> k [label="так"];
-  k -> a [label="так"]; k -> p [label="ні"]; a -> p;
-  p -> f [label="так"]; f -> u -> m -> h;
-  p -> b [label="ні"]; b -> h;
-  h -> k [constraint=false, label="  цикл"];
+  s -> c; c -> e [label=" ні "]; c -> k [label=" так"];
+  k -> a [label=" так "]; k -> p [label=" ні"]; a -> p;
+  p -> b [label=" ні "]; p -> f [label=" так"];
+  f -> u -> t -> m -> h;
+  b -> h;
+  a1 -> k; h -> a2;
 }''' % (FONT, FONT))
 
 
 def diagram_format():
     dot('diagram_format', r'''
 digraph F {
-  rankdir=TB; nodesep=0.2; ranksep=0.35;
-  node [shape=record, fontname="%s", fontsize=11];
-  elf [label="{ELF для ARM|{заголовок ELF\n52 Б|заголовки\nпрограми|сегмент 1:\nпрогравач, 0x00000000\n~5,8 КБ|сегмент 2:\nтрек, 0x00200000|заголовки\nрозділів}}"];
-  hdr [label="{Заголовок треку «DE1A», 64 Б|{magic|версія\nкодек|частота|канали\nвідліків у блоці|блоків\nбайтів у блоці|відліків|зміщення\nрозмір даних|контрольна\nсума|прапорці\n(HEX)|затримка\nчерги|вікно шкали\nmax_lag}}"];
-  blk [label="{Блок IMA ADPCM, 1032 Б (стерео)|{стан L: 4 Б\n(pred, index)|стан R: 4 Б|L: 1024 напівбайти\n512 Б|R: 1024 напівбайти\n512 Б}}"];
-  elf -> hdr [label="початок сегмента 2", fontname="%s", fontsize=10, arrowsize=0.6];
-  hdr -> blk [label="далі блоки підряд", fontname="%s", fontsize=10, arrowsize=0.6];
-}''' % ((FONT,) * 3))
+  rankdir=TB; nodesep=0.2; ranksep=0.32;
+  node [shape=record, fontname="%s", fontsize=13];
+  edge [fontname="%s", fontsize=12, arrowsize=0.7];
+  elf [label="{ELF для ARM|{заголовок\nELF, 52 Б|заголовки\nпрограми|сегмент 1: програвач\n0x00000000, 6,1 КБ|сегмент 2: трек\n0x00200000|заголовки\nрозділів}}"];
+  hdr [label="{Заголовок треку «DE1A», 64 Б|{сигнатура, версія,\nкодек|частота,\nканали|відліків у блоці,\nблоків|байтів у блоці,\nусього відліків}|{зміщення й розмір\nданих|контрольна\nсума|прапорці,\nзатримка черги|вікно шкали,\nmax_lag}}"];
+  blk [label="{Блок IMA ADPCM, 1032 Б (стерео)|{стан L, 4 Б\n(pred, index)|стан R, 4 Б\n(pred, index)|L: 1024 напівбайти\n512 Б|R: 1024 напівбайти\n512 Б}}"];
+  elf -> hdr [label="  початок сегмента 2"];
+  hdr -> blk [label="  далі блоки підряд"];
+}''' % (FONT, FONT))
 
 
 # --------------------------------------------------------------- графіки
@@ -226,7 +228,7 @@ def plot_adpcm(track):
         a = int(60.0 * t.rate)
         n = int(0.020 * t.rate)
         x = np.arange(n) / t.rate * 1000
-        ax.plot(x, pcm[0, a:a + n] / 32768, color='black', linewidth=0.9, label='вихідний звук')
+        ax.plot(x, pcm[0, a:a + n] / 32768, color='black', linewidth=0.9, label='підготовлений звук')
         ax.plot(x, dec[0, a:a + n] / 32768, color='0.45', linewidth=0.9, linestyle='--',
                 label='після IMA ADPCM')
         ax.plot(x, (pcm[0, a:a + n].astype(int) - dec[0, a:a + n]) / 32768, color='0.3',
@@ -288,11 +290,13 @@ def plot_clock():
 
 
 if __name__ == '__main__':
-    track = sys.argv[1]
     diagram_system()
     diagram_states()
     diagram_loop()
     diagram_format()
+    if len(sys.argv) < 2:
+        sys.exit(0)
+    track = sys.argv[1]
     pcm, _ = audio.prepare(track, 8000, 2)
     plot_meter(pcm, 8000)
     plot_adpcm(track)
