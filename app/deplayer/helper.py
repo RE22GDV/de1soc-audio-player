@@ -52,6 +52,12 @@ AUTOLOAD = r"""
   function loaded() {
     return (document.body.innerText || '').indexOf('Total size is') >= 0;
   }
+  // світлодіоди, кнопки, індикатори й звук — нагору стовпця пристроїв, щоб усе було видно одразу
+  var box = document.getElementById('dev_ui_box');
+  ['devff203040', 'devff200020', 'devff200050', 'devff200000'].forEach(function (id) {
+    var panel = document.getElementById(id);
+    if (box && panel) box.prepend(panel);
+  });
   try {
     var r = await fetch('/local/' + encodeURIComponent(name), { cache: 'no-store' });
     if (!r.ok) throw new Error('HTTP ' + r.status);

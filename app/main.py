@@ -250,7 +250,7 @@ class App:
 
         def fn():
             self.log('')
-            self.log('=== Автоматична перевірка в CPUlator (браузер без вікна, близько 30 с)')
+            self.log('=== Автоматична перевірка в CPUlator (браузер без вікна, близько хвилини)')
             ok, lines, nums = check.run(self.result['elf'], self.premem() > 0, log=self.log)
             self.log('Підсумок: %s' % ('усе працює' if ok else 'є зауваження — див. рядки «НІ»'))
             self.q.put(('status', 'Перевірку в CPUlator %s' % ('пройдено' if ok else 'не пройдено')))

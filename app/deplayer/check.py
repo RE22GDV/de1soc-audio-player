@@ -153,7 +153,7 @@ def run(elf_path, bigmem=False, log=print, shot=None):
         res(changes >= 3 and lit >= 3, 'шкала гучності рухається: %d змін за 4 с, до %d світлодіодів' % (changes, lit))
         res(bool(levels) and min(levels) > 0,
             'черга звуку не спорожнюється: %d…%d відліків' % (nums['fifo_min'], nums['fifo_max']))
-        res('Underflowed: yes' not in (b.js(AUDIO) or ''), 'звук без розривів (немає ознаки Underflowed)')
+        res('Overflowed: yes' not in (b.js(AUDIO) or ''), 'запис без переповнення черги (немає ознаки Overflowed)')
         if shot:
             b.shot(shot)
 
