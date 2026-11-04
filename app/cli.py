@@ -2,7 +2,7 @@
 """Командний рядок (без вікна):
 
     python app/cli.py make  трек.mp3 --target cpulator|board8|board48 [--codec adpcm|pcm16] [--mono]
-    python app/cli.py check файл.elf
+    python app/cli.py check файл.elf [--cpulator [--bigmem]]
     python app/cli.py cpulator файл.elf [--bigmem]
 """
 import argparse
@@ -33,6 +33,8 @@ def main():
     m.add_argument('--out', default=None)
     c = sub.add_parser('check', help='перевірити готовий файл')
     c.add_argument('elf')
+    c.add_argument('--cpulator', action='store_true', help='також перевірити в CPUlator (браузер без вікна)')
+    c.add_argument('--bigmem', action='store_true', help='CPUlator із наперед виділеною пам\'яттю')
     r = sub.add_parser('cpulator', help='відкрити CPUlator із завантаженим файлом')
     r.add_argument('elf')
     r.add_argument('--bigmem', action='store_true')
@@ -46,6 +48,9 @@ def main():
         with open(a.elf, 'rb') as f:
             ok, lines, _ = verify.check(f.read())
         print('\n'.join(lines))
+        if ok and a.cpulator:
+            from deplayer import check
+            ok = check.run(a.elf, a.bigmem)[0]
         sys.exit(0 if ok else 1)
     if a.cmd == 'cpulator':
         from deplayer import helper

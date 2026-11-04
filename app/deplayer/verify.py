@@ -3,9 +3,10 @@
 
 Що перевіряється:
   1. ELF: формат ARM, точка входу, сегменти програми й треку не перекриваються.
-  2. Заголовок треку: сигнатура, версія, розміри блоків узгоджені між собою.
+  2. Заголовок треку: ті самі вимоги, що й у програвачі, плюс межі сегмента.
   3. Контрольна сума — та сама, яку рахує програвач перед стартом.
-  4. Незалежне розпакування всіх блоків і порівняння з вихідним звуком (SNR).
+  4. Незалежне розпакування всіх блоків і порівняння з підготовленими
+     відліками, тобто вже після зміни частоти й вирівнювання гучності (SNR).
   5. Чи вміститься файл у звичайний CPUlator.
 """
 import numpy as np
@@ -50,20 +51,14 @@ def check(elf_raw, reference=None):
     raw = seg[0]['data']
 
     h = blobmod.parse(raw)
-    if h['magic'] != blobmod.MAGIC or h['version'] != blobmod.VERSION:
-        bad('невідома сигнатура або версія треку')
+    problems = blobmod.header_errors(h)
+    if h['data_off'] + h['data_size'] > len(raw):
+        problems.append('дані треку виходять за межі сегмента')
+    for p in problems:
+        bad(p)
+    if problems:
         return ok, lines, nums
-    nb, bs, bb = h['blocks'], h['block_samples'], h['block_bytes']
-    exp_bb = (4 * h['channels'] + h['channels'] * bs // 2) if h['codec_name'] == 'adpcm' \
-        else 2 * h['channels'] * bs
-    if bb != exp_bb:
-        bad('розмір блоку %d замість %d' % (bb, exp_bb))
-    if h['data_size'] < nb * bb or h['data_off'] + h['data_size'] > len(raw):
-        bad('дані треку обрізано')
-    if not (0 < h['total_samples'] <= nb * bs):
-        bad('неправильна кількість відліків')
-    if bs > 2048:
-        bad('блок більший за буфер програвача (2048)')
+    nb, bs = h['blocks'], h['block_samples']
     dur = h['total_samples'] / h['rate']
     lines.append('Трек: %s, %d Гц, %s, %d блоків по %d відліків, %d:%02d'
                  % (h['codec_name'].upper(), h['rate'], 'стерео' if h['channels'] == 2 else 'моно',
@@ -75,7 +70,7 @@ def check(elf_raw, reference=None):
     if cs != h['checksum']:
         bad('контрольна сума не збігається (0x%08X проти 0x%08X)' % (cs, h['checksum']))
     else:
-        lines.append('Контрольна сума 0x%08X збігається — її ж перевіряє програвач перед стартом' % cs)
+        lines.append('Контрольна сума 0x%08X збігається, заголовок узгоджений — те саме перевіряє програвач' % cs)
 
     pcm = blobmod.decode(raw)
     nums['peak_dbfs'] = 20 * np.log10(max(1, int(np.max(np.abs(pcm.astype(np.int32))))) / 32768)
@@ -85,11 +80,11 @@ def check(elf_raw, reference=None):
         nums['snr_db'] = s
         if h['codec_name'] == 'pcm16':
             if s != float('inf'):
-                bad('PCM16 розпакувався не без втрат')
+                bad('PCM16 не збігається з підготовленими відліками')
             else:
-                lines.append('Розпакування збігається з вихідним звуком біт у біт')
+                lines.append('Розпакування збігається з підготовленими відліками біт у біт')
         else:
-            lines.append('Розпакування всіх %d блоків: SNR %.1f дБ відносно вихідного звуку' % (nb, s))
+            lines.append('Розпакування всіх %d блоків: SNR %.1f дБ відносно підготовлених відліків' % (nb, s))
             if s < 15:
                 bad('надто низьке відношення сигнал/шум')
     else:

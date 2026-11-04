@@ -3,13 +3,15 @@
 
 Завантажує файл, запускає програвач і дивиться на те саме, що побачила б
 людина: чи світиться й рухається шкала на LEDR, чи наповнюється черга
-звуку без спустошень, чи працюють KEY0 (пауза) і KEY1 (з початку).
+звуку без спустошень, чи працюють KEY0 (пауза) і KEY1 (з початку), чи
+доходить трек до кінця.
 """
 import os
 import re
 import time
 
-from . import cdp, helper
+from . import blob as blobmod
+from . import cdp, elf, helper
 
 LEDS = r"""return [...document.querySelectorAll('#devff200000 .dev_led_led')].filter(d=>d.offsetParent!==null)
   .map(d=>{const m=getComputedStyle(d).backgroundColor.match(/\d+/g); return (m && +m[0]>200 && +m[1]<120)?'1':'0';}).join('');"""
@@ -17,7 +19,14 @@ AUDIO = "const e=document.getElementById('devff203040'); return e ? e.innerText.
 MSG = r"""return (((document.body && document.body.innerText)||'').match(/Total size is \d+ bytes/)||[''])[0];"""
 STATE = "return (document.getElementById('tb_runstate')||{}).textContent||'';"
 BANNER = "return (document.getElementById('de1a_banner')||{}).textContent||'';"
-HEX = r"""const c=[...document.querySelectorAll('#devff200020 *')]; return document.getElementById('devff200020') ? 1 : 0;"""
+# сегменти кожного індикатора як число: a — розряд 0, ... g — розряд 6, крапка — розряд 7
+HEX = r"""return [...document.querySelectorAll('#devff200020 .dev_sseg')].filter(d=>d.offsetParent!==null)
+  .map(d=>[...d.children].reduce((v,c,i)=>v|(c.classList.contains('dev_sseg_off')?0:1<<i),0));"""
+SEG7 = {0x3F: '0', 0x06: '1', 0x5B: '2', 0x4F: '3', 0x66: '4', 0x6D: '5', 0x7D: '6', 0x07: '7',
+        0x7F: '8', 0x6F: '9', 0x73: 'P', 0x77: 'A', 0x79: 'E', 0x54: 'n', 0x00: ' '}
+SIM_RATE = 8000       # частота звуку в CPUlator
+KEY_SECONDS = 0.55    # скільки триває одне натискання через сторінку, с
+MIN_SECONDS = 12      # стільки звучання в CPUlator потрібно, щоб пройти всі перевірки
 
 
 def _key(b, n):
@@ -33,6 +42,52 @@ def _key(b, n):
 def _out_level(text):
     m = re.search(r'Out L:\s*(\d+)', text)
     return int(m.group(1)) if m else None
+
+
+def read_hex(b):
+    """Рядок на індикаторах, зліва направо (HEX5...HEX0)."""
+    return ''.join(SEG7.get(v & 0x7F, '?') for v in (b.js(HEX) or []))
+
+
+def _track_header(elf_path):
+    with open(elf_path, 'rb') as f:
+        t = elf.read(f.read())
+    base = t['symbols']['__blob_base']
+    return blobmod.parse(next(s for s in t['segments'] if s['vaddr'] == base)['data'])
+
+
+def check_end(b, hdr):
+    """Перемотує майже до кінця, чекає на кінець треку й запускає трек знову.
+    Повертає (успіх, опис). Світлодіоди можуть згаснути й від тиші, тому ознакою
+    кінця є KEY0: у стані КІНЕЦЬ він починає трек заново, а не ставить на паузу."""
+    dur = hdr['total_samples'] / hdr['rate']
+    slow = hdr['rate'] / SIM_RATE              # файл на 48 кГц у CPUlator звучить ушестеро повільніше
+    step = 10 + KEY_SECONDS / slow
+    for _ in range(max(0, int((dur - 8) / step))):
+        _key(b, 3)
+    t0, drained, ended = time.time(), None, False
+    limit = (step + 8) * slow + 8
+    while time.time() - t0 < limit:
+        lv = _out_level(b.js(AUDIO))
+        if lv == 0:
+            drained = drained or time.time()
+            ended = hdr['flags'] & blobmod.FLAG_HEX == 0 or read_hex(b)[:2] == 'En'
+            if ended and time.time() - drained > 1.0:
+                break
+        else:
+            drained = None
+        time.sleep(0.2)
+    if not (drained and ended):
+        return False, 'трек не дійшов до кінця за %.0f с (на індикаторах «%s»)' % (limit, read_hex(b))
+    leds = b.js(LEDS) or ''
+    if '1' in leds:
+        return False, 'після кінця треку світлодіоди світяться: ' + leds
+    _key(b, 0)
+    time.sleep(1.0)
+    lv = _out_level(b.js(AUDIO))
+    if not lv:
+        return False, 'після кінця треку KEY0 не запустив його знову'
+    return True, 'кінець треку: черга спорожніла, LEDR згасли, KEY0 запустив трек знову'
 
 
 def watch(b, seconds, step=0.05):
@@ -79,6 +134,11 @@ def run(elf_path, bigmem=False, log=print, shot=None):
         res('Total size' in msg, 'файл завантажено: ' + (msg.strip()[-60:] or 'немає відповіді'))
         if 'Total size' not in msg:
             return False, lines, nums
+        hdr = _track_header(elf_path)
+        if hdr['total_samples'] / SIM_RATE < MIN_SECONDS:
+            res(False, 'фрагмент надто короткий для перевірки: у CPUlator потрібно щонайменше %d с звучання'
+                % MIN_SECONDS)
+            return False, lines, nums
         c = b.rect("[...document.querySelectorAll('button')].find(x=>x.textContent.trim().startsWith('Continue'))")
         b.click(c['x'] + c['w'] / 2, c['y'] + c['h'] / 2)
         time.sleep(1.0)
@@ -111,6 +171,7 @@ def run(elf_path, bigmem=False, log=print, shot=None):
         _key(b, 1)                                           # з початку
         time.sleep(1.5)
         res('Running' in (b.js(STATE) or ''), 'KEY1 — трек почався знову')
+        res(*check_end(b, hdr))
         return ok, lines, nums
     except Exception as e:
         res(False, 'перевірка зупинилася: %s' % e)

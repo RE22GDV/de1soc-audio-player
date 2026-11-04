@@ -97,7 +97,7 @@ class App:
         self.codec = tk.StringVar(value='adpcm')
         ttk.Radiobutton(col2, text='IMA ADPCM (стиснення 4:1)', value='adpcm',
                         variable=self.codec).pack(anchor='w')
-        ttk.Radiobutton(col2, text='PCM16 (без втрат, файл учетверо більший)', value='pcm16',
+        ttk.Radiobutton(col2, text='PCM16 (без стиснення, файл учетверо більший)', value='pcm16',
                         variable=self.codec).pack(anchor='w')
         self.mono = tk.BooleanVar(value=False)
         ttk.Checkbutton(col2, text='Моно (файл удвічі менший)', variable=self.mono).pack(anchor='w')

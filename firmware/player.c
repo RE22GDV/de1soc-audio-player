@@ -31,6 +31,9 @@
 #define MAX_BLOCK       2048            /* відліків на канал у блоці        */
 #define RING            256             /* вікон рівня в кільці (>5 с)      */
 #define SEEK_SECONDS    10
+#define METER_HZ        50              /* вікон шкали за секунду (по 20 мс) */
+#define DDR_END         0x40000000u     /* кінець DDR3 у карті адрес ядра   */
+#define MAX_QUEUE       65536u          /* межа для latency і max_lag       */
 
 typedef unsigned int   u32;
 typedef unsigned short u16;
@@ -173,8 +176,8 @@ static void fill_fifo(void) {
         if (blk != cur_block) load_block(blk);
         l = buf_l[off];
         r = (T->channels == 2) ? buf_r[off] : l;
-        audio[2] = (u32)((int)l << 16);
-        audio[3] = (u32)((int)r << 16);
+        audio[2] = ((u32)(u16)l) << 16;
+        audio[3] = ((u32)(u16)r) << 16;
 
         a = (u16)(l < 0 ? -l : l);
         if (a > win_peak) win_peak = a;
@@ -196,7 +199,9 @@ static void fill_fifo(void) {
    що вже записано в чергу (мінус її затримка), і не відстає більш ніж
    на max_lag. На платі черга маленька, і годинник просто йде за pos; у
    CPUlator черга спорожнюється блоками по 2048 відліків, і таймер
-   згладжує ці стрибки. */
+   згладжує ці стрибки. Коли всі відліки вже в черзі, позиція запису
+   більше не просувається, а останні відліки ще звучать: верхньою межею
+   стає кінець треку, і годинник доходить до нього за таймером. */
 static void update_clock(void) {
     u32 now = timer_now();
     u32 elapsed = tick_last - now;
@@ -211,6 +216,7 @@ static void update_clock(void) {
 
     hi = (pos >= seek_base + T->latency) ? pos - T->latency : seek_base;
     lo = (hi >= seek_base + T->max_lag) ? hi - T->max_lag : seek_base;
+    if (pos >= T->total_samples) hi = T->total_samples;
     if (clk > hi) clk = hi;
     if (clk < lo) clk = lo;
 }
@@ -269,12 +275,46 @@ static void show_time(void) {
 }
 
 /* ------------------------------------------------------------ перевірка */
+/* Поля заголовка мають описувати саме той трек, який програвач уміє
+   розпакувати. Заголовок не входить до контрольної суми, а неузгоджені
+   поля призвели б до читання поза межами даних. */
+static int header_ok(void) {
+    u32 ch = T->channels, n = T->block_samples, expect;
+    unsigned long long samples, bytes;
+
+    if (T->magic != MAGIC || T->version != 1) return 0;
+    if (T->codec != CODEC_PCM16 && T->codec != CODEC_ADPCM) return 0;
+    if (T->rate != 8000 && T->rate != 48000) return 0;
+    if (ch != 1 && ch != 2) return 0;
+    if (n == 0 || n > MAX_BLOCK) return 0;
+    if (T->codec == CODEC_ADPCM) {
+        if (n & 1) return 0;                /* по два відліки в байті      */
+        expect = ch * (4 + n / 2);
+    } else {
+        expect = ch * n * 2;
+    }
+    if (T->block_bytes != expect || T->blocks == 0) return 0;
+
+    samples = (unsigned long long)T->blocks * n;
+    if (T->total_samples == 0 || T->total_samples > samples ||
+        T->total_samples <= samples - n) return 0;
+
+    bytes = (unsigned long long)T->blocks * T->block_bytes;
+    if (T->data_off != sizeof(struct track)) return 0;
+    if (T->data_size != ((bytes + 3) & ~3ULL)) return 0;
+    if ((unsigned long long)(u32)__blob_base + T->data_off + T->data_size > DDR_END) return 0;
+
+    if (T->meter_win != T->rate / METER_HZ) return 0;
+    if (T->latency > MAX_QUEUE || T->max_lag > MAX_QUEUE) return 0;
+    return (T->flags & ~FLAG_HEX) == 0;
+}
+
+/* Сума слів виявляє обрив передачі й зіпсовані ділянки, але не будь-яке
+   пошкодження: наприклад, перестановка слів її не змінює. */
 static int track_ok(void) {
     const u32 * w;
     u32 i, n, sum = 0;
-    if (T->magic != MAGIC || T->version != 1) return 0;
-    if (T->block_samples == 0 || T->block_samples > MAX_BLOCK) return 0;
-    if (T->channels < 1 || T->channels > 2 || T->rate == 0 || T->meter_win == 0) return 0;
+    if (!header_ok()) return 0;
     w = (const u32 *)data;
     n = (T->data_size + 3) / 4;
     for (i = 0; i < n; i++) sum += w[i];
