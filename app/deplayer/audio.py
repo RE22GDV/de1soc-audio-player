@@ -24,14 +24,36 @@ def _fast_len(n):
     return best
 
 
+def _info(data):
+    """Власні канали й частота файла. Формат визначається за вмістом."""
+    head = data[:4]
+    if head == b'OggS':
+        return miniaudio.vorbis_get_info(data)
+    if head == b'fLaC':
+        return miniaudio.flac_get_info(data)
+    if head == b'RIFF':
+        return miniaudio.wav_get_info(data)
+    return miniaudio.mp3_get_info(data)
+
+
 def load(path):
-    """Повертає (float32 [канали, відліки] у діапазоні -1..1, частота, назва)."""
+    """Повертає (float32 [канали, відліки] у діапазоні -1..1, частота, тривалість, с).
+    Файл читаємо самі: функції бібліотеки, що приймають шлях (decode_file, а для ogg
+    і get_file_info), у Windows не відкривають шляхи кирилицею."""
     if miniaudio is None:
         raise RuntimeError('Немає бібліотеки miniaudio: запустіть run.bat, він її встановить.')
-    info = miniaudio.get_file_info(path)
-    snd = miniaudio.decode_file(path, output_format=miniaudio.SampleFormat.FLOAT32)
+    with open(path, 'rb') as f:
+        data = f.read()
+    try:
+        info = _info(data)
+        # без явних каналів і частоти бібліотека робить із усього стерео 44,1 кГц
+        snd = miniaudio.decode(data, output_format=miniaudio.SampleFormat.FLOAT32,
+                               nchannels=info.nchannels, sample_rate=info.sample_rate)
+    except miniaudio.DecodeError as e:
+        raise ValueError('Не вдалося розкодувати трек. Підтримуються mp3, wav, flac '
+                         'і ogg (Vorbis). Подробиці: %s' % (e,)) from e
     x = np.frombuffer(snd.samples, dtype=np.float32).reshape(-1, snd.nchannels).T.copy()
-    return x, snd.sample_rate, info
+    return x, snd.sample_rate, snd.duration
 
 
 def resample(x, src, dst):
@@ -57,12 +79,13 @@ def resample(x, src, dst):
 def prepare(path, rate, channels, start=0.0, length=None, normalize=True):
     """Трек -> int16 [канали, відліки] на потрібній частоті.
     Повертає (pcm, опис для журналу)."""
-    x, sr, info = load(path)
+    x, sr, duration = load(path)
     a = int(max(0.0, start) * sr)
     b = x.shape[1] if not length else min(x.shape[1], a + int(length * sr))
     x = x[:, a:b]
     if x.shape[1] == 0:
         raise ValueError('Обраний фрагмент порожній')
+    source_channels = int(x.shape[0])
     if channels == 1 and x.shape[0] > 1:
         x = x.mean(axis=0, keepdims=True)
     elif channels == 2 and x.shape[0] == 1:
@@ -76,7 +99,7 @@ def prepare(path, rate, channels, start=0.0, length=None, normalize=True):
         gain = 1.0 / peak                       # лише захист від обмеження
     pcm = np.clip(np.round(y * gain * 32767.0), -32768, 32767).astype(np.int16)
     note = {
-        'source_rate': sr, 'source_channels': int(x.shape[0]), 'source_seconds': info.duration,
+        'source_rate': sr, 'source_channels': source_channels, 'source_seconds': duration,
         'seconds': pcm.shape[1] / rate, 'gain_db': 20 * np.log10(gain) if gain > 0 else 0.0,
     }
     return pcm, note
