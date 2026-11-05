@@ -5,6 +5,7 @@
 
 Потрібні Graphviz (dot), matplotlib і Pillow — лише для цих рисунків, не для застосунку.
 """
+import csv
 import os
 import subprocess
 import sys
@@ -108,7 +109,7 @@ digraph S {
   PLAY -> PAUSE [label="KEY0: позиція\nза годинником  "];
   PAUSE -> PLAY [label="  KEY0 — далі\n  KEY1 — з початку"];
   PAUSE -> PAUSE [label="KEY2, KEY3\n±10 с"];
-  PLAY -> END [label="  усе записано й\n  годинник дійшов\n  до кінця треку"];
+  PLAY -> END [label="  тишу після треку\n  записано, трек\n  відзвучав"];
   END -> PLAY [label="  KEY0, KEY1 — з початку\n  KEY2 — на 10 с назад"];
 }''' % (FONT, FONT))
 
@@ -131,9 +132,9 @@ digraph L {
   p [shape=diamond, margin="0,0", label="стан =\nВІДТВОРЕННЯ?"];
   b [label="пауза: блимання шкали\nкінець: LEDR = 0"];
   { rank=same; p; b; }
-  f [label="fill_fifo(): доки в черзі є місце, розпакувати\nблок, записати L і R, пік модуля у вікні 20 мс"];
-  u [label="update_clock(): годинник за таймером у межах\nпозиції запису мінус затримка черги. Коли все\nзаписано, верхня межа дорівнює кінцю треку"];
-  t [label="годинник дійшов до кінця треку: стан = КІНЕЦЬ"];
+  f [label="fill_fifo(): доки в черзі є місце, розпакувати\nблок, записати L і R, пік модуля у вікні 20 мс.\nПісля кінця треку записується тиша"];
+  u [label="update_clock(): годинник за таймером у межах\nпозиції запису мінус затримка черги"];
+  t [label="тишу записано, трек відзвучав: стан = КІНЕЦЬ"];
   m [label="meter_step(): рівень вікна у смугу, спад\n1 світлодіод за 40 мс, утримання піку 0,6 с"];
   h [label="HEX: час мм.сс (лише CPUlator)"];
   s -> c; c -> e [label=" ні "]; c -> k [label=" так"];
@@ -151,7 +152,7 @@ digraph F {
   rankdir=TB; nodesep=0.2; ranksep=0.32;
   node [shape=record, fontname="%s", fontsize=13];
   edge [fontname="%s", fontsize=12, arrowsize=0.7];
-  elf [label="{ELF для ARM|{заголовок\nELF, 52 Б|заголовки\nпрограми|сегмент 1: програвач\n0x00000000, 6,1 КБ|сегмент 2: трек\n0x00200000|заголовки\nрозділів}}"];
+  elf [label="{ELF для ARM|{заголовок\nELF, 52 Б|заголовки\nпрограми|сегмент 1: програвач\n0x00000000, 6,3 КБ|сегмент 2: трек\n0x00200000|заголовки\nрозділів}}"];
   hdr [label="{Заголовок треку «DE1A», 64 Б|{сигнатура, версія,\nкодек|частота,\nканали|відліків у блоці,\nблоків|байтів у блоці,\nусього відліків}|{зміщення й розмір\nданих|контрольна\nсума|прапорці,\nзатримка черги|вікно шкали,\nmax_lag}}"];
   blk [label="{Блок IMA ADPCM, 1032 Б (стерео)|{стан L, 4 Б\n(pred, index)|стан R, 4 Б\n(pred, index)|L: 1024 напівбайти\n512 Б|R: 1024 напівбайти\n512 Б}}"];
   elf -> hdr [label="  початок сегмента 2"];
@@ -250,43 +251,21 @@ def plot_adpcm(track):
 
 
 def plot_clock():
-    """Модель годинника шкали в CPUlator: черга 8192 відліки знімається блоками
-    по 2048 щочетверть секунди й одразу доливається, таймер іде на 95,65 %
-    реального часу. Що звучить: блок, знятий з черги, грає наступні 256 мс."""
-    t_ = TARGETS['cpulator']
-    rate, lat, lag = t_.rate, t_.latency, t_.max_lag
-    dt = 0.002
-    T = np.arange(0, 2.5, dt)
-    deq, clk = 0, 0
-    P, C, H, L = [], [], [], []
-    for t in T:
-        k = int(t / 0.256) + 1              # скільки блоків уже знято з черги
-        deq = 2048 * k
-        pos = deq + 8192                    # програвач одразу доливає чергу
-        heard = max(0.0, 2048 * (k - 1) + (t % 0.256) * rate)
-        clk += rate * dt * 0.9565
-        hi = pos - lat
-        lo = hi - lag
-        clk = min(max(clk, lo), hi)
-        P.append(heard)
-        C.append(clk)
-        H.append(hi)
-        L.append(lo)
-    fig, ax = plt.subplots(figsize=(6.5, 3.2))
-    ax.fill_between(T, np.array(L) / rate, np.array(H) / rate, color='0.88', step='pre',
-                    label='дозволене вікно годинника')
-    ax.plot(T, np.array(C) / rate, color='black', linewidth=1.2, label='годинник шкали clk')
-    ax.plot(T, np.array(P) / rate, color='0.3', linewidth=0.9, linestyle='--', label='що звучить')
-    ax.set_xlabel('Час роботи, с')
-    ax.set_ylabel('Позиція в треку, с')
-    ax.set_ylim(bottom=0)
-    ax.legend(loc='upper left', frameon=False, fontsize=10)
+    """Виміряне відхилення годинника шкали від звуку: clock_offset.csv пише
+    tests/cpulator_sync.py (спостереження за Web Audio у CPUlator)."""
+    with open(os.path.join(HERE, 'clock_offset.csv'), encoding='utf-8') as f:
+        rows = list(csv.DictReader(f))
+    t = [int(r['second']) for r in rows]
+    d = [float(r['clock_minus_sound']) for r in rows]
+    fig, ax = plt.subplots(figsize=(6.5, 2.7))
+    ax.axhline(0, color='0.6', linewidth=0.7, linestyle=':')
+    ax.plot(t, d, color='black', linewidth=0.9, marker='o', markersize=3)
+    ax.set_xlabel('Час на індикаторах, с')
+    ax.set_ylabel('Годинник мінус звук, с')
     comma_axes(ax)
     fig.savefig(os.path.join(HERE, 'plot_clock.png'))
     plt.close(fig)
-    err = np.array(C[400:]) - np.array(P[400:])
-    print('рисунок plot_clock.png; відхилення годинника від звучання: %.0f…%.0f мс'
-          % (err.min() / rate * 1000, err.max() / rate * 1000))
+    print('рисунок plot_clock.png: %+.2f…%+.2f с' % (min(d), max(d)))
 
 
 if __name__ == '__main__':

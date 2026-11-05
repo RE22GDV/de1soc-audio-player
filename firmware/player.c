@@ -48,7 +48,7 @@ struct track {
     u32 blocks, block_bytes, total_samples;
     u32 data_off, data_size, checksum;
     u32 flags;
-    u32 latency;                        /* затримка черги звуку, відліків   */
+    u32 latency;                        /* від запису до звучання, відліків */
     u32 meter_win;                      /* відліків у вікні шкали (20 мс)   */
     u32 max_lag;                        /* наскільки годинник може відстати */
     u32 reserved[2];
@@ -164,18 +164,30 @@ static void seek_to(u32 p) {
     tick_acc = 0;
 }
 
+/* Кінець потоку: за останнім відліком треку йде тиша завдовжки в затримку від
+   запису до звучання плюс max_lag (блок, у якому лежить останній відлік). Черга
+   приймає нові відліки лише в міру відтворення, тому запис цієї тиші закінчується
+   тоді, коли трек справді відзвучав. */
+static u32 stream_end(void) {
+    return T->total_samples + T->latency + T->max_lag;
+}
+
 /* Доливає в чергу звуку стільки відліків, скільки туди влізе */
 static void fill_fifo(void) {
     u32 space = audio[1];
     u32 wsl = (space >> 24) & 0xFF, wsr = (space >> 16) & 0xFF;
     u32 n = wsl < wsr ? wsl : wsr;
+    u32 end = stream_end();
 
-    while (n-- && pos < T->total_samples) {
-        short l, r;
+    while (n-- && pos < end) {
+        short l = 0, r = 0;
         u16 a;
-        if (blk != cur_block) load_block(blk);
-        l = buf_l[off];
-        r = (T->channels == 2) ? buf_r[off] : l;
+        if (pos < T->total_samples) {
+            if (blk != cur_block) load_block(blk);
+            l = buf_l[off];
+            r = (T->channels == 2) ? buf_r[off] : l;
+            if (++off == T->block_samples) { off = 0; blk++; }
+        }
         audio[2] = ((u32)(u16)l) << 16;
         audio[3] = ((u32)(u16)r) << 16;
 
@@ -191,7 +203,6 @@ static void fill_fifo(void) {
         }
 
         pos++;
-        if (++off == T->block_samples) { off = 0; blk++; }
     }
 }
 
@@ -199,9 +210,8 @@ static void fill_fifo(void) {
    що вже записано в чергу (мінус її затримка), і не відстає більш ніж
    на max_lag. На платі черга маленька, і годинник просто йде за pos; у
    CPUlator черга спорожнюється блоками по 2048 відліків, і таймер
-   згладжує ці стрибки. Коли всі відліки вже в черзі, позиція запису
-   більше не просувається, а останні відліки ще звучать: верхньою межею
-   стає кінець треку, і годинник доходить до нього за таймером. */
+   згладжує ці стрибки. Після кінця треку позиція запису йде далі за
+   рахунок тиші, тому годинник доходить до кінця так само. */
 static void update_clock(void) {
     u32 now = timer_now();
     u32 elapsed = tick_last - now;
@@ -216,7 +226,6 @@ static void update_clock(void) {
 
     hi = (pos >= seek_base + T->latency) ? pos - T->latency : seek_base;
     lo = (hi >= seek_base + T->max_lag) ? hi - T->max_lag : seek_base;
-    if (pos >= T->total_samples) hi = T->total_samples;
     if (clk > hi) clk = hi;
     if (clk < lo) clk = lo;
 }
@@ -264,7 +273,8 @@ static u32 meter_leds(void) {
 static const u8 seg7[10] = { 0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D, 0x7D, 0x07, 0x7F, 0x6F };
 
 static void show_time(void) {
-    u32 s = clk / T->rate, m = s / 60;
+    u32 shown = clk < T->total_samples ? clk : T->total_samples;
+    u32 s = shown / T->rate, m = s / 60;
     u32 lo = seg7[s % 10] | (seg7[(s % 60) / 10] << 8) |
              ((seg7[m % 10] | 0x80) << 16) | (seg7[(m / 10) % 10] << 24);
     u32 hi = 0;
@@ -315,6 +325,7 @@ static int track_ok(void) {
     const u32 * w;
     u32 i, n, sum = 0;
     if (!header_ok()) return 0;
+    data = __blob_base + T->data_off;
     w = (const u32 *)data;
     n = (T->data_size + 3) / 4;
     for (i = 0; i < n; i++) sum += w[i];
@@ -326,7 +337,6 @@ int main(void) {
     u32 k, blink = 0;
 
     T = (const struct track *)__blob_base;
-    data = __blob_base + T->data_off;
 
     timer[0] = 0xFFFFFFFFu;                 /* Load                       */
     timer[2] = 0x3;                         /* увімкнути, автоперезавантаж */
@@ -369,7 +379,11 @@ int main(void) {
         if (state == PLAYING) {
             fill_fifo();
             update_clock();
-            if (clk >= T->total_samples) { clk = T->total_samples; state = ENDED; }
+            if (pos >= stream_end()) {          /* трек уже відзвучав      */
+                audio_clear();                  /* у черзі лишилася тиша   */
+                clk = T->total_samples;
+                state = ENDED;
+            }
             meter_step();
             *ledr = meter_leds();
         } else {

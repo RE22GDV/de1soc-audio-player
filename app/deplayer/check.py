@@ -66,17 +66,19 @@ def check_end(b, hdr):
     for _ in range(max(0, int((dur - 8) / step))):
         _key(b, 3)
     t0, drained, ended = time.time(), None, False
+    has_hex = hdr['flags'] & blobmod.FLAG_HEX != 0
     limit = (step + 8) * slow + 8
     while time.time() - t0 < limit:
         lv = _out_level(b.js(AUDIO))
+        en = has_hex and read_hex(b)[:2] == 'En'
         if lv == 0:
             drained = drained or time.time()
-            ended = hdr['flags'] & blobmod.FLAG_HEX == 0 or read_hex(b)[:2] == 'En'
+            ended = en or not has_hex
             if ended and time.time() - drained > 1.0:
                 break
         else:
             drained = None
-        time.sleep(0.2)
+        time.sleep(0.1)
     if not (drained and ended):
         return False, 'трек не дійшов до кінця за %.0f с (на індикаторах «%s»)' % (limit, read_hex(b))
     leds = b.js(LEDS) or ''
@@ -87,7 +89,7 @@ def check_end(b, hdr):
     lv = _out_level(b.js(AUDIO))
     if not lv:
         return False, 'після кінця треку KEY0 не запустив його знову'
-    return True, 'кінець треку: черга спорожніла, LEDR згасли, KEY0 запустив трек знову'
+    return True, 'кінець треку: LEDR згасли, черга порожня, KEY0 запустив трек знову'
 
 
 def watch(b, seconds, step=0.05):
